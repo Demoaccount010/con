@@ -28,57 +28,81 @@ user = Client(
     api_hash=API_HASH
 )
 
+async def force_activate_channel(chat_id: int):
+    try:
+        # 1️⃣ Dialogs scan (THIS IS THE KEY)
+        async for d in user.get_dialogs():
+            if d.chat and d.chat.id == chat_id:
+                return True
+
+        # 2️⃣ Force dialog creation
+        await user.send_chat_action(chat_id, "typing")
+        await asyncio.sleep(1)
+
+        # 3️⃣ Re-scan dialogs
+        async for d in user.get_dialogs():
+            if d.chat and d.chat.id == chat_id:
+                return True
+
+    except Exception as e:
+        print("ACTIVATION FAIL:", e)
+
+    return False
+
+
+# ---------- FORCE ACCESS ----------
+async def force_access(chat_id: int) -> bool:
+    """
+    Ensure userbot has dialog-level access to channel
+    """
+    try:
+        # 1️⃣ Check existing dialogs (REAL truth)
+        async for d in user.get_dialogs():
+            if d.chat and d.chat.id == chat_id:
+                return True
+
+        # 2️⃣ Force dialog creation
+        await user.send_chat_action(chat_id, "typing")
+        await asyncio.sleep(1)
+
+        # 3️⃣ Re-check dialogs
+        async for d in user.get_dialogs():
+            if d.chat and d.chat.id == chat_id:
+                return True
+
+    except Exception as e:
+        print("FORCE_ACCESS ERROR:", e)
+
+    return False
+
+
 # ---------- UTIL ----------
 def extract_episode(text: str):
     if not text:
         return "NA"
 
-    t = text.lower()
+    t = re.sub(r'[\[\]\(\)\._\-]', ' ', text.lower())
 
-    # normalize
-    t = re.sub(r'[\[\]\(\)\._\-]', ' ', t)
-
-    # 🔥 HIGHEST PRIORITY: [309]
     m = re.search(r'\[(\d{1,4})\]', t)
     if m:
         return m.group(1)
 
     patterns = [
+        r's\d{1,2}\s*e(\d{1,4})',
         r'episode\s*[:\-]?\s*(\d{1,4})',
         r'\bep\s*(\d{1,4})',
         r'\be(\d{1,4})\b',
-        r's\d{1,2}\s*e(\d{1,4})',
-        r'\b(\d{1,3})\b'
+        r'\b(\d{1,3})\b',
     ]
 
     for p in patterns:
-        m = re.search(p, t, re.I)
+        m = re.search(p, t)
         if m:
             ep = int(m.group(1))
             if ep <= 2000:
                 return str(ep)
 
     return "NA"
-
-
-def extract_season(text: str):
-    if not text:
-        return None
-
-    t = text.lower()
-
-    patterns = [
-        r'season\s*[:\-]?\s*(\d{1,2})',
-        r's\s*(\d{1,2})'
-    ]
-
-    for p in patterns:
-        m = re.search(p, t, re.I)
-        if m:
-            return m.group(1)
-
-    return None
-
 
 def extract_quality(text: str):
     for q in ["2160p", "1080p", "720p", "480p"]:
@@ -88,24 +112,16 @@ def extract_quality(text: str):
 
 def build_caption(text):
     text = re.sub(r'@\w+', REPLACE_AT, text or "")
-
-    season = extract_season(text)
     ep = extract_episode(text)
     q = extract_quality(text)
 
-    lines = []
-
-    if season:
-        lines.append(f"**📀 Season = {season}**")
-
-    lines.append(f"**📟 Episode = {ep}**")
-    lines.append(f"**🎧 Language = {DEFAULT_LANGUAGE}**")
-    lines.append(f"**💿 Quality = {q}**")
-    lines.append("**━━━━━━━━━━━━━━━━━━**")
-    lines.append(f"**🔥 {REPLACE_AT} 🔥**")
-
-    return "\n".join(lines)
-
+    return (
+        f"**📟 Episode = {ep}**\n"
+        f"**🎧 Language = {DEFAULT_LANGUAGE}**\n"
+        f"**💿 Quality = {q}**\n"
+        f"**━━━━━━━━━━━━━━━━━━**\n"
+        f"**🔥 {REPLACE_AT} 🔥**"
+    )
 
 # ---------- LOG SYSTEM ----------
 async def log_update(src_id: str, chat_title: str, event: str):
@@ -156,6 +172,7 @@ async def commands(_, m):
             "🔥 **Hybrid Auto Forward System**\n\n"
             "/add source target1 target2\n"
             "/remove source\n"
+            "/list\n"
             "/on /off\n"
             "/status\n"
             "/stats\n"
@@ -163,9 +180,22 @@ async def commands(_, m):
         )
 
     elif cmd[0] == "/add":
-        DATA["maps"][cmd[1]] = cmd[2:]
+        src = int(cmd[1])
+        tgts = [int(x) for x in cmd[2:]]
+
+        ok = await force_activate_channel(src)
+
+        if not ok:
+            return await m.reply("❌ Userbot cannot activate source channel")
+
+        for t in tgts:
+            await force_activate_channel(t)
+
+        DATA["maps"][str(src)] = [str(x) for x in tgts]
         save_json("storage.json", DATA)
-        await m.reply("✅ Source added")
+
+        await m.reply("✅ Source & Targets activated + added")
+
 
     elif cmd[0] == "/remove":
         DATA["maps"].pop(cmd[1], None)
@@ -174,22 +204,34 @@ async def commands(_, m):
 
     elif cmd[0] == "/list":
         if not DATA["maps"]:
-            return await m.reply("❌ No source channels added yet")
+            return await m.reply("❌ No mappings found")
 
-        text = "📋 **Channel Mapping List**\n\n"
+        text = "📋 **Channel Mapping & Access**\n\n"
 
-        for src, targets in DATA["maps"].items():
-            access, title = await check_userbot_access(int(src))
+        for src, tgts in DATA["maps"].items():
+            src_id = int(src)
+
+            # 🔥 FORCE ACCESS CHECK (REAL)
+            has_access = await force_access(src_id)
+
+            name = "Unknown"
+            if has_access:
+                try:
+                    async for d in user.get_dialogs():
+                        if d.chat and d.chat.id == src_id:
+                            name = d.chat.title
+                            break
+                except:
+                    pass
 
             text += (
                 f"📡 **Source:** `{src}`\n"
-                f"🏷 Name: {title or 'Unknown'}\n"
-                f"👤 Userbot Access: {'✅ Yes' if access else '❌ No'}\n"
-                f"🎯 Targets ({len(targets)}):\n"
+                f"🏷 **Name:** {name}\n"
+                f"👤 **Userbot:** {'✅ ACCESS' if has_access else '❌ NO ACCESS'}\n"
             )
 
-            for t in targets:
-                text += f" └➤ `{t}`\n"
+            for t in tgts:
+                text += f" └➤ 🎯 `{t}`\n"
 
             text += "━━━━━━━━━━━━━━━━━━\n"
 
@@ -207,12 +249,12 @@ async def commands(_, m):
         await m.reply("🔴 Userbot OFF")
 
     elif cmd[0] == "/status":
-        uptime = int(time.time() - START_TIME)
+        up = int(time.time() - START_TIME)
         await m.reply(
             f"📊 **Status**\n\n"
             f"Userbot: {'ON' if DATA['enabled'] else 'OFF'}\n"
             f"Sources: {len(DATA['maps'])}\n"
-            f"Uptime: {uptime//3600}h {(uptime%3600)//60}m"
+            f"Uptime: {up//3600}h {(up%3600)//60}m"
         )
 
     elif cmd[0] == "/stats":
@@ -226,16 +268,6 @@ async def commands(_, m):
         save_json("storage.json", DATA)
         save_json("logs.json", LOGS)
         os._exit(1)
-
-        #------HELPER-------
-
-async def check_userbot_access(chat_id: int):
-    try:
-        chat = await user.get_chat(chat_id)
-        return True, chat.title
-    except Exception:
-        return False, None
-
 
 # ---------- DAILY SUMMARY ----------
 async def daily_summary():
@@ -264,7 +296,22 @@ async def watcher(_, m):
     if not DATA["enabled"]:
         return
 
+    # ignore self posts
+    if m.from_user and m.from_user.is_self:
+        return
+
     src = str(m.chat.id)
+
+    # build target set
+    all_targets = set()
+    for tgts in DATA["maps"].values():
+        all_targets.update(tgts)
+
+    # ignore target channels
+    if src in all_targets:
+        return
+
+    # process only source
     if src not in DATA["maps"]:
         return
 
@@ -311,7 +358,4 @@ while True:
     except KeyboardInterrupt:
         sys.exit(0)
     except Exception as e:
-        asyncio.get_event_loop().run_until_complete(
-            send_crash_report(str(e))
-        )
         time.sleep(5)
