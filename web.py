@@ -1,4 +1,5 @@
 import os
+import logging
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +8,10 @@ from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 from db import search_anime, get_meta
 
+# Logging On
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 
 API_ID = int(os.getenv("API_ID"))
@@ -14,31 +19,48 @@ API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) 
 
-# Client for Streaming (Different Session Name taaki conflict na ho)
+# Client (Session alag, taaki bot se takkar na ho)
 client = Client("stream_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, ipv6=False)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🚀 Web Server Starting...")
     await client.start()
+    
+    # --- MAGIC FIX ---
+    # Streaming client ko Channel ka pata batana zaruri hai
+    try:
+        print(f"🔗 Handshaking with Channel: {CHANNEL_ID}...")
+        chat = await client.get_chat(CHANNEL_ID)
+        print(f"✅ Connected to Channel: {chat.title}")
+    except Exception as e:
+        print(f"❌ Channel Access Error: {e}")
+        print("💡 Tip: Make sure Bot is Admin in the Channel!")
+
     yield
+    print("🛑 Web Server Stopping...")
     await client.stop()
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
-def home(): return {"status": "Online"}
+def home(): return {"status": "Stream Server Online"}
 
 @app.get("/search")
 def search(q: str): return {"results": search_anime(q)}
 
 @app.get("/stream/{message_id}")
 async def stream(message_id: int, request: Request):
+    # 1. Meta Data Check
     meta = get_meta(message_id)
-    if not meta: raise HTTPException(status_code=404, detail="Not Found")
+    if not meta: 
+        logger.error(f"Video ID {message_id} not found in DB")
+        raise HTTPException(status_code=404, detail="Not Found")
     
     file_name, file_size = meta
+    
+    # 2. Range Header Logic
     range_header = request.headers.get("Range")
     start, end = 0, file_size - 1
     
@@ -50,18 +72,27 @@ async def stream(message_id: int, request: Request):
             if parts[0]: start = int(parts[0])
             if len(parts) > 1 and parts[1]: end = int(parts[1])
             
-    chunk_size = 1024 * 1024
+    chunk_size = 1024 * 1024 # 1MB Chunk
     content_length = end - start + 1
     
+    # 3. Stream Generator
     async def iterfile():
-        current = start
-        while current <= end:
-            limit = min(chunk_size, end - current + 1)
-            async for chunk in client.stream_media(message_id=message_id, chat_id=CHANNEL_ID, offset=current, limit=limit):
-                yield chunk
-                current += len(chunk)
-                if current > end: break
-    
+        try:
+            current = start
+            while current <= end:
+                limit = min(chunk_size, end - current + 1)
+                async for chunk in client.stream_media(
+                    message_id=message_id, 
+                    chat_id=CHANNEL_ID, 
+                    offset=current, 
+                    limit=limit
+                ):
+                    yield chunk
+                    current += len(chunk)
+                    if current > end: break
+        except Exception as e:
+            logger.error(f"Stream Error: {e}")
+
     headers = {
         "Content-Range": f"bytes {start}-{end}/{file_size}",
         "Accept-Ranges": "bytes",
@@ -69,6 +100,8 @@ async def stream(message_id: int, request: Request):
         "Content-Type": "video/mp4",
         "Content-Disposition": f'inline; filename="{file_name}"',
     }
+    
+    # 4. Return Stream
     return StreamingResponse(iterfile(), status_code=206, headers=headers)
 
 if __name__ == "__main__":
