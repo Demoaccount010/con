@@ -8,10 +8,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pyrogram import Client
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
-# Import 'get_latest_anime' here
-from db import search_anime, get_meta, get_latest_anime 
+from db import search_anime, get_meta, get_latest_anime
 
+# Logging
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 
 API_ID = int(os.getenv("API_ID"))
@@ -34,12 +36,18 @@ async def lifespan(app: FastAPI):
     await client.stop()
 
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["*"], 
+    allow_headers=["*"], 
+)
 
 @app.get("/")
 def home(): return {"status": "Online"}
 
-# --- NEW ROUTE: Latest Videos ---
 @app.get("/latest")
 def latest():
     return {"results": get_latest_anime()}
@@ -54,12 +62,18 @@ async def stream(message_id: int, request: Request):
     if not meta: raise HTTPException(status_code=404, detail="Not Found")
     
     file_name, file_size = meta
-    safe_filename = quote(file_name)
+    
+    try:
+        safe_filename = quote(file_name)
+    except:
+        safe_filename = "video.mp4"
+
     mime_type, _ = mimetypes.guess_type(file_name)
     if not mime_type: mime_type = "video/mp4"
 
     range_header = request.headers.get("Range")
     start, end = 0, file_size - 1
+    
     if range_header:
         bytes_prefix = "bytes="
         if range_header.startswith(bytes_prefix):
@@ -72,14 +86,33 @@ async def stream(message_id: int, request: Request):
     content_length = end - start + 1
     
     async def iterfile():
-        current = start
-        while current <= end:
-            limit = min(chunk_size, end - current + 1)
-            async for chunk in client.stream_media(message_id, CHANNEL_ID, offset=current, limit=limit):
-                yield chunk
-                current += len(chunk)
-                if current > end: break
-    
+        try:
+            # 1. Pehle Message Fetch karo (Zaruri hai)
+            msg = await client.get_messages(CHANNEL_ID, message_id)
+            if not msg or (not msg.video and not msg.document):
+                logger.error("Message/Video not found on Telegram")
+                return
+
+            # 2. File ID nikalo
+            file_id = msg.video.file_id if msg.video else msg.document.file_id
+
+            current = start
+            while current <= end:
+                limit = min(chunk_size, end - current + 1)
+                
+                # 3. FIX: Arguments ab sahi hain
+                # Hum File ID pass kar rahe hain, aur offset/limit keyword args se
+                async for chunk in client.stream_media(
+                    file_id, 
+                    offset=current, 
+                    limit=limit
+                ):
+                    yield chunk
+                    current += len(chunk)
+                    if current > end: break
+        except Exception as e:
+            logger.error(f"Stream Error: {e}")
+
     headers = {
         "Content-Range": f"bytes {start}-{end}/{file_size}",
         "Accept-Ranges": "bytes",
