@@ -1,5 +1,4 @@
 import os
-import asyncio
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,37 +17,34 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) 
 OWNER_ID = int(os.getenv("OWNER_ID"))
 
-# Pyrogram Client (IPv6 False kiya hai taaki connection stable rahe)
+# Pyrogram Client
 client = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, ipv6=False)
 
-# --- DEBUGGING HANDLER (Sabse Important) ---
-# Ye handler har message ko terminal mein print karega
+# --- DEBUG LOGGER (Terminal mein msg print karega) ---
 @client.on_message(group=-1)
 async def log_everything(c, m: Message):
-    print(f"👀 Update Received! From: {m.from_user.id} | Text: {m.text or 'Media'}")
+    print(f"👀 New Message! From User ID: {m.from_user.id} | Name: {m.from_user.first_name}")
 
 # --- COMMANDS ---
 
 @client.on_message(filters.command(["start", "help"]) & filters.private)
 async def start_handler(c, m: Message):
-    # Strict Check
+    print(f"👉 Start Command Received from: {m.from_user.id}")
+    
     if m.from_user.id != OWNER_ID:
-        print(f"❌ Blocked user: {m.from_user.id}")
-        await m.reply_text("❌ Access Denied.")
+        await m.reply_text(f"❌ **Access Denied!**\nYour ID: `{m.from_user.id}`\nOwner ID: `{OWNER_ID}`")
         return
 
-    print("✅ Owner recognized. Sending reply...")
     await m.reply_text(
-        "👋 **Bot is Working!**\n\n"
-        "Commands:\n"
-        "1. Forward video to add.\n"
+        "👋 **Bot is Online!**\n\n"
+        "1. Forward video here to add.\n"
         "2. `/batch 100 200`\n"
         "3. `/check`"
     )
 
 @client.on_message(filters.command("check"))
 async def check_handler(c, m: Message):
-    await m.reply_text("✅ I am Alive!")
+    await m.reply_text("✅ I am Alive and Listening!")
 
 # Media Handler
 @client.on_message(filters.private & (filters.video | filters.document | filters.forwarded))
@@ -63,7 +59,7 @@ async def media_handler(c, m: Message):
         msg_id = m.forward_from_message_id
         title = m.caption or m.video.file_name or f"Video {msg_id}"
     elif m.video or m.document:
-        await m.reply_text("⚠ **Note:** Direct uploads won't work perfectly. Please forward from the Channel.")
+        await m.reply_text("⚠ Please forward from the Channel to get the correct Message ID.")
         return
 
     if msg_id:
@@ -72,8 +68,9 @@ async def media_handler(c, m: Message):
         add_anime(msg_id, title, file_size, duration)
         await m.reply_text(f"✅ **Saved:** {title}")
     else:
-        await m.reply_text("❌ Channel ID match nahi hua. Config check karo.")
+        await m.reply_text("❌ Channel ID match nahi hua.")
 
+# Batch Handler
 @client.on_message(filters.command("batch") & filters.private)
 async def batch_handler(c, m: Message):
     if m.from_user.id != OWNER_ID: return
@@ -90,7 +87,6 @@ async def batch_handler(c, m: Message):
         count = 0
         batch_ids = list(range(start, end + 1))
         
-        # Batch fetch in chunks of 200
         for i in range(0, len(batch_ids), 200):
             chunk = batch_ids[i:i+200]
             msgs = await c.get_messages(CHANNEL_ID, chunk)
@@ -109,18 +105,17 @@ async def batch_handler(c, m: Message):
 async def lifespan(app: FastAPI):
     print("🚀 Server Starting...")
     init_db()
+    print("🤖 Connecting to Telegram...")
     await client.start()
     
-    # --- FIX: DELETE WEBHOOK ---
-    print("🧹 Clearing Webhooks...")
-    await client.delete_webhook()
-    
+    # Send startup msg
     try:
-        await client.send_message(OWNER_ID, "🟢 **Bot Connected & Webhook Cleared!**")
-    except Exception as e:
-        print(f"⚠ Msg Error: {e}")
+        await client.send_message(OWNER_ID, "🟢 **Bot Connected!**")
+    except:
+        print("⚠ Could not send startup msg (Check Owner ID)")
 
     yield
+    print("🛑 Stopping...")
     await client.stop()
 
 app = FastAPI(lifespan=lifespan)
@@ -171,4 +166,4 @@ async def stream(message_id: int, request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=80)
+    uvicorn.run(app, host="0.0.0.0", port=8080)
