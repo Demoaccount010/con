@@ -22,11 +22,41 @@ API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) 
 
-# Client Setup
-client = Client("stream_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, ipv6=False)
+# Global Variable (par initialize baad mein karenge)
+app_state = {}
 
-# FastAPI Setup
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("🚀 Web Server Starting...")
+    
+    # 1. Client ko YAHAN initialize karo (Taaki same Loop mile)
+    client = Client(
+        "stream_session", 
+        api_id=API_ID, 
+        api_hash=API_HASH, 
+        bot_token=BOT_TOKEN, 
+        ipv6=False
+    )
+    
+    await client.start()
+    print("✅ Telegram Client Connected on Current Loop")
+    
+    # Handshake
+    try:
+        await client.get_chat(CHANNEL_ID)
+        print("✅ Handshake Success")
+    except Exception as e:
+        print(f"⚠ Handshake Warning: {e}")
+
+    # App state mein save karo taaki routes use kar sakein
+    app_state["client"] = client
+
+    yield
+    
+    print("🛑 Stopping Client...")
+    await client.stop()
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,6 +79,11 @@ def search(q: str):
 
 @app.get("/stream/{message_id}")
 async def stream(message_id: int, request: Request):
+    # Client ko state se nikalo
+    client = app_state.get("client")
+    if not client:
+        raise HTTPException(status_code=500, detail="Server Error: Client not connected")
+
     meta = get_meta(message_id)
     if not meta: raise HTTPException(status_code=404, detail="Not Found")
     
@@ -78,19 +113,18 @@ async def stream(message_id: int, request: Request):
     
     async def iterfile():
         try:
-            # 1. Message Fetch
+            # Message Fetch
             msg = await client.get_messages(CHANNEL_ID, message_id)
             if not msg or (not msg.video and not msg.document):
                 return
             
-            # 2. File ID Extraction
             file_id = msg.video.file_id if msg.video else msg.document.file_id
 
             current = start
             while current <= end:
                 limit = min(chunk_size, end - current + 1)
                 
-                # 3. FIX: Sirf File ID pass karo, CHANNEL_ID nahi
+                # Streaming
                 async for chunk in client.stream_media(file_id, offset=current, limit=limit):
                     yield chunk
                     current += len(chunk)
@@ -108,24 +142,6 @@ async def stream(message_id: int, request: Request):
     }
     return StreamingResponse(iterfile(), status_code=206, headers=headers)
 
-# --- MAIN DRIVER ---
-async def main():
-    print("🚀 Initializing Stream Server...")
-    await client.start()
-    print("✅ Client Connected")
-    
-    try:
-        await client.get_chat(CHANNEL_ID)
-        print("✅ Handshake Success")
-    except:
-        pass
-
-    config = uvicorn.Config(app, host="0.0.0.0", port=80, log_level="info")
-    server = uvicorn.Server(config)
-    
-    print("🌍 Web Server Running...")
-    await server.serve()
-    await client.stop()
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Force Asyncio Loop
+    uvicorn.run(app, host="0.0.0.0", port=80, loop="asyncio")
