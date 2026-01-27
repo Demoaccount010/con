@@ -1,5 +1,6 @@
 import os
 import logging
+from urllib.parse import quote  # <-- YE NAYI LINE HAI
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,7 +20,6 @@ API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) 
 
-# Client (Session alag, taaki bot se takkar na ho)
 client = Client("stream_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, ipv6=False)
 
 @asynccontextmanager
@@ -27,15 +27,12 @@ async def lifespan(app: FastAPI):
     print("🚀 Web Server Starting...")
     await client.start()
     
-    # --- MAGIC FIX ---
-    # Streaming client ko Channel ka pata batana zaruri hai
     try:
         print(f"🔗 Handshaking with Channel: {CHANNEL_ID}...")
         chat = await client.get_chat(CHANNEL_ID)
         print(f"✅ Connected to Channel: {chat.title}")
     except Exception as e:
         print(f"❌ Channel Access Error: {e}")
-        print("💡 Tip: Make sure Bot is Admin in the Channel!")
 
     yield
     print("🛑 Web Server Stopping...")
@@ -52,15 +49,15 @@ def search(q: str): return {"results": search_anime(q)}
 
 @app.get("/stream/{message_id}")
 async def stream(message_id: int, request: Request):
-    # 1. Meta Data Check
     meta = get_meta(message_id)
     if not meta: 
-        logger.error(f"Video ID {message_id} not found in DB")
         raise HTTPException(status_code=404, detail="Not Found")
     
     file_name, file_size = meta
     
-    # 2. Range Header Logic
+    # --- EMOJI FIX: Filename ko safe banao ---
+    safe_filename = quote(file_name) 
+
     range_header = request.headers.get("Range")
     start, end = 0, file_size - 1
     
@@ -72,10 +69,9 @@ async def stream(message_id: int, request: Request):
             if parts[0]: start = int(parts[0])
             if len(parts) > 1 and parts[1]: end = int(parts[1])
             
-    chunk_size = 1024 * 1024 # 1MB Chunk
+    chunk_size = 1024 * 1024 
     content_length = end - start + 1
     
-    # 3. Stream Generator
     async def iterfile():
         try:
             current = start
@@ -98,13 +94,12 @@ async def stream(message_id: int, request: Request):
         "Accept-Ranges": "bytes",
         "Content-Length": str(content_length),
         "Content-Type": "video/mp4",
-        "Content-Disposition": f'inline; filename="{file_name}"',
+        # Use safe_filename here
+        "Content-Disposition": f'inline; filename="{safe_filename}"',
     }
     
-    # 4. Return Stream
     return StreamingResponse(iterfile(), status_code=206, headers=headers)
 
 if __name__ == "__main__":
     import uvicorn
-    # Port 80 hi rakhna hai
     uvicorn.run(app, host="0.0.0.0", port=80)
