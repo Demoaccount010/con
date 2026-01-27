@@ -8,7 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pyrogram import Client
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
-from db import search_anime, get_meta
+# Import 'get_latest_anime' here
+from db import search_anime, get_meta, get_latest_anime 
 
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
@@ -38,9 +39,13 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 @app.get("/")
 def home(): return {"status": "Online"}
 
+# --- NEW ROUTE: Latest Videos ---
+@app.get("/latest")
+def latest():
+    return {"results": get_latest_anime()}
+
 @app.get("/search")
 def search(q: str): 
-    # Ye function ab 'filename' bhi return karega (db.py mein change kiya hai)
     return {"results": search_anime(q)}
 
 @app.get("/stream/{message_id}")
