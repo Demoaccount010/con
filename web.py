@@ -3,6 +3,7 @@ import logging
 import asyncio
 import mimetypes
 from urllib.parse import quote
+from contextlib import asynccontextmanager # <-- Ye add kiya hai
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,14 +23,14 @@ API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) 
 
-# Global Variable (par initialize baad mein karenge)
+# Global Variable
 app_state = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🚀 Web Server Starting...")
     
-    # 1. Client ko YAHAN initialize karo (Taaki same Loop mile)
+    # Client Initialization inside Lifespan (Same Loop Fix)
     client = Client(
         "stream_session", 
         api_id=API_ID, 
@@ -41,14 +42,12 @@ async def lifespan(app: FastAPI):
     await client.start()
     print("✅ Telegram Client Connected on Current Loop")
     
-    # Handshake
     try:
         await client.get_chat(CHANNEL_ID)
         print("✅ Handshake Success")
     except Exception as e:
         print(f"⚠ Handshake Warning: {e}")
 
-    # App state mein save karo taaki routes use kar sakein
     app_state["client"] = client
 
     yield
@@ -79,7 +78,6 @@ def search(q: str):
 
 @app.get("/stream/{message_id}")
 async def stream(message_id: int, request: Request):
-    # Client ko state se nikalo
     client = app_state.get("client")
     if not client:
         raise HTTPException(status_code=500, detail="Server Error: Client not connected")
@@ -113,7 +111,6 @@ async def stream(message_id: int, request: Request):
     
     async def iterfile():
         try:
-            # Message Fetch
             msg = await client.get_messages(CHANNEL_ID, message_id)
             if not msg or (not msg.video and not msg.document):
                 return
@@ -124,7 +121,6 @@ async def stream(message_id: int, request: Request):
             while current <= end:
                 limit = min(chunk_size, end - current + 1)
                 
-                # Streaming
                 async for chunk in client.stream_media(file_id, offset=current, limit=limit):
                     yield chunk
                     current += len(chunk)
