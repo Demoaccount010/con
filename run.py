@@ -3,39 +3,30 @@ import uvicorn
 from main import app, client, init_db, OWNER_ID
 
 async def main():
-    # 1. Database Initialize
     print("🔄 Initializing Database...")
     init_db()
 
-    # 2. Uvicorn Server Config (Manual Setup)
-    # Port 8080 wahi rakhna jo Cloudflare Tunnel mein hai
-    config = uvicorn.Config(app, host="0.0.0.0", port=8080, log_level="info")
+    # --- PORT 80 CONFIGURATION ---
+    # Hum Port 80 use kar rahe hain kyunki tumhara Cloudflare wahi point kar raha hai
+    config = uvicorn.Config(app, host="0.0.0.0", port=80, log_level="info")
     server = uvicorn.Server(config)
 
-    # 3. Start Pyrogram Client
     print("🤖 Starting Bot...")
     await client.start()
     
-    # Try cleaning webhook
+    # Startup Msg
+    print(f"✅ Bot Started! Waiting for OWNER_ID: {OWNER_ID}")
     try:
-        await client.delete_webhook()
-    except:
-        pass
-        
-    print("✅ Bot Started! Sending notification...")
-    try:
-        await client.send_message(OWNER_ID, "🟢 **System Online (Custom Loop Mode)**")
+        await client.send_message(OWNER_ID, "🟢 **System Online (Port 80)**")
     except Exception as e:
         print(f"⚠ Notification Failed: {e}")
 
-    # 4. Start Web Server (Ye block karega jab tak server chal raha hai)
-    print("🚀 Starting Web Server...")
+    print("🚀 Starting Web Server on Port 80...")
+    # Ye line server start karegi aur bot ko background mein chalne degi
     await server.serve()
 
-    # 5. Stop Pyrogram jab server band ho
     print("🛑 Stopping Bot...")
     await client.stop()
 
 if __name__ == "__main__":
-    # Ye Magic Line hai jo sabko ek hi Loop par chalati hai
     asyncio.run(main())
