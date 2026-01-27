@@ -25,7 +25,7 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 # Client Setup
 client = Client("stream_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, ipv6=False)
 
-# FastAPI Setup (No Lifespan here)
+# FastAPI Setup
 app = FastAPI()
 
 app.add_middleware(
@@ -78,18 +78,19 @@ async def stream(message_id: int, request: Request):
     
     async def iterfile():
         try:
-            # File ID fetch karo
+            # 1. Message Fetch
             msg = await client.get_messages(CHANNEL_ID, message_id)
             if not msg or (not msg.video and not msg.document):
                 return
             
+            # 2. File ID Extraction
             file_id = msg.video.file_id if msg.video else msg.document.file_id
 
             current = start
             while current <= end:
                 limit = min(chunk_size, end - current + 1)
                 
-                # Streaming Logic
+                # 3. FIX: Sirf File ID pass karo, CHANNEL_ID nahi
                 async for chunk in client.stream_media(file_id, offset=current, limit=limit):
                     yield chunk
                     current += len(chunk)
@@ -107,32 +108,24 @@ async def stream(message_id: int, request: Request):
     }
     return StreamingResponse(iterfile(), status_code=206, headers=headers)
 
-# --- MAIN DRIVER (The Fix) ---
+# --- MAIN DRIVER ---
 async def main():
     print("🚀 Initializing Stream Server...")
-    
-    # 1. Start Client
     await client.start()
-    print("✅ Telegram Client Connected")
+    print("✅ Client Connected")
     
-    # Handshake
     try:
         await client.get_chat(CHANNEL_ID)
-        print("✅ Channel Handshake Success")
-    except Exception as e:
-        print(f"⚠ Channel Warning: {e}")
+        print("✅ Handshake Success")
+    except:
+        pass
 
-    # 2. Start Uvicorn Server (On same Loop)
     config = uvicorn.Config(app, host="0.0.0.0", port=80, log_level="info")
     server = uvicorn.Server(config)
     
-    print("🌍 Web Server Running on Port 80...")
+    print("🌍 Web Server Running...")
     await server.serve()
-    
-    # 3. Stop Client when server stops
-    print("🛑 Stopping Client...")
     await client.stop()
 
 if __name__ == "__main__":
-    # Ye sabse zaruri line hai - Single Loop Enforcement
     asyncio.run(main())
