@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 import mimetypes
 from urllib.parse import quote
 from fastapi import FastAPI, Request, HTTPException
@@ -7,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pyrogram import Client
 from dotenv import load_dotenv
-from contextlib import asynccontextmanager
+import uvicorn
 from db import search_anime, get_meta, get_latest_anime
 
 # Logging
@@ -21,21 +22,11 @@ API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) 
 
+# Client Setup
 client = Client("stream_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, ipv6=False)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    print("🚀 Web Server Starting...")
-    await client.start()
-    try:
-        await client.get_chat(CHANNEL_ID)
-        print("✅ Handshake Success")
-    except:
-        pass
-    yield
-    await client.stop()
-
-app = FastAPI(lifespan=lifespan)
+# FastAPI Setup (No Lifespan here)
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
@@ -87,29 +78,23 @@ async def stream(message_id: int, request: Request):
     
     async def iterfile():
         try:
-            # 1. Pehle Message Fetch karo (Zaruri hai)
+            # File ID fetch karo
             msg = await client.get_messages(CHANNEL_ID, message_id)
             if not msg or (not msg.video and not msg.document):
-                logger.error("Message/Video not found on Telegram")
                 return
-
-            # 2. File ID nikalo
+            
             file_id = msg.video.file_id if msg.video else msg.document.file_id
 
             current = start
             while current <= end:
                 limit = min(chunk_size, end - current + 1)
                 
-                # 3. FIX: Arguments ab sahi hain
-                # Hum File ID pass kar rahe hain, aur offset/limit keyword args se
-                async for chunk in client.stream_media(
-                    file_id, 
-                    offset=current, 
-                    limit=limit
-                ):
+                # Streaming Logic
+                async for chunk in client.stream_media(file_id, offset=current, limit=limit):
                     yield chunk
                     current += len(chunk)
                     if current > end: break
+                    
         except Exception as e:
             logger.error(f"Stream Error: {e}")
 
@@ -122,6 +107,32 @@ async def stream(message_id: int, request: Request):
     }
     return StreamingResponse(iterfile(), status_code=206, headers=headers)
 
+# --- MAIN DRIVER (The Fix) ---
+async def main():
+    print("🚀 Initializing Stream Server...")
+    
+    # 1. Start Client
+    await client.start()
+    print("✅ Telegram Client Connected")
+    
+    # Handshake
+    try:
+        await client.get_chat(CHANNEL_ID)
+        print("✅ Channel Handshake Success")
+    except Exception as e:
+        print(f"⚠ Channel Warning: {e}")
+
+    # 2. Start Uvicorn Server (On same Loop)
+    config = uvicorn.Config(app, host="0.0.0.0", port=80, log_level="info")
+    server = uvicorn.Server(config)
+    
+    print("🌍 Web Server Running on Port 80...")
+    await server.serve()
+    
+    # 3. Stop Client when server stops
+    print("🛑 Stopping Client...")
+    await client.stop()
+
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=80)
+    # Ye sabse zaruri line hai - Single Loop Enforcement
+    asyncio.run(main())
