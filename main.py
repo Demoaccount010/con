@@ -18,150 +18,109 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) 
 OWNER_ID = int(os.getenv("OWNER_ID"))
 
-# Pyrogram Client
-client = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+# Pyrogram Client (IPv6 False kiya hai taaki connection stable rahe)
+client = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, ipv6=False)
 
-# --- HELPER FUNCTION ---
-async def is_owner(user_id):
-    if user_id == OWNER_ID:
-        return True
-    return False
+# --- DEBUGGING HANDLER (Sabse Important) ---
+# Ye handler har message ko terminal mein print karega
+@client.on_message(group=-1)
+async def log_everything(c, m: Message):
+    print(f"👀 Update Received! From: {m.from_user.id} | Text: {m.text or 'Media'}")
 
-# --- BOT COMMANDS ---
+# --- COMMANDS ---
 
 @client.on_message(filters.command(["start", "help"]) & filters.private)
 async def start_handler(c, m: Message):
-    # Debug Print
-    print(f"📩 Message from: {m.from_user.id} | Owner ID expected: {OWNER_ID}")
-    
+    # Strict Check
     if m.from_user.id != OWNER_ID:
-        await m.reply_text(f"❌ **Access Denied!**\nYour ID: `{m.from_user.id}`\nOwner ID in Config: `{OWNER_ID}`")
+        print(f"❌ Blocked user: {m.from_user.id}")
+        await m.reply_text("❌ Access Denied.")
         return
 
+    print("✅ Owner recognized. Sending reply...")
     await m.reply_text(
-        "👋 **Welcome Boss! Anime Stream Bot Ready.**\n\n"
-        "**Available Commands:**\n"
-        "1️⃣ **Forward Video:** Add directly to DB.\n"
-        "2️⃣ `/batch <start> <end>` : Add multiple videos by ID.\n"
-        "3️⃣ `/index <id>` : Add single video by ID.\n"
-        "4️⃣ `/check` : Check Server Status."
+        "👋 **Bot is Working!**\n\n"
+        "Commands:\n"
+        "1. Forward video to add.\n"
+        "2. `/batch 100 200`\n"
+        "3. `/check`"
     )
 
 @client.on_message(filters.command("check"))
 async def check_handler(c, m: Message):
-    await m.reply_text("✅ **Server is Online!**\nBot is listening.")
+    await m.reply_text("✅ I am Alive!")
 
-# Handle Forwards & Videos
+# Media Handler
 @client.on_message(filters.private & (filters.video | filters.document | filters.forwarded))
 async def media_handler(c, m: Message):
     if m.from_user.id != OWNER_ID:
-        return # Ignore strangers silently for media
+        return
 
-    # Logic to handle forwards
     msg_id = None
     title = None
     
-    # Case 1: Forwarded from Channel
     if m.forward_from_chat and m.forward_from_chat.id == CHANNEL_ID:
         msg_id = m.forward_from_message_id
         title = m.caption or m.video.file_name or f"Video {msg_id}"
-    
-    # Case 2: Just a random video sent to bot (No Link)
     elif m.video or m.document:
-        await m.reply_text("⚠ **Warning:** Please forward from the **Channel** so I get the correct Message ID.")
+        await m.reply_text("⚠ **Note:** Direct uploads won't work perfectly. Please forward from the Channel.")
         return
 
     if msg_id:
         file_size = m.video.file_size or m.document.file_size
         duration = m.video.duration or 0
-        
         add_anime(msg_id, title, file_size, duration)
-        await m.reply_text(f"✅ **Added to DB!**\n🆔 ID: `{msg_id}`\n📺 Title: {title}")
+        await m.reply_text(f"✅ **Saved:** {title}")
     else:
-        await m.reply_text("❌ Could not get Message ID. Make sure you forwarded from the configured Channel.")
+        await m.reply_text("❌ Channel ID match nahi hua. Config check karo.")
 
-# Batch Command
 @client.on_message(filters.command("batch") & filters.private)
 async def batch_handler(c, m: Message):
-    if m.from_user.id != OWNER_ID:
-        return
+    if m.from_user.id != OWNER_ID: return
 
     try:
         if len(m.command) < 3:
-            await m.reply_text("ℹ **Usage:** `/batch <start_id> <end_id>`\nExample: `/batch 100 200`")
+            await m.reply_text("Usage: `/batch start end`")
             return
-            
-        start_id = int(m.command[1])
-        end_id = int(m.command[2])
         
-        status_msg = await m.reply_text(f"⏳ **Starting Batch Scan:** {start_id} to {end_id}...")
+        start = int(m.command[1])
+        end = int(m.command[2])
+        status = await m.reply_text("⏳ Scanning...")
         
         count = 0
-        batch_size = 200
+        batch_ids = list(range(start, end + 1))
         
-        for i in range(start_id, end_id + 1, batch_size):
-            current_end = min(i + batch_size, end_id + 1)
-            batch_ids = list(range(i, current_end))
-            
-            messages = await c.get_messages(CHANNEL_ID, batch_ids)
-            
-            for msg in messages:
-                if msg and not msg.empty and (msg.video or msg.document):
-                    media = msg.video or msg.document
-                    if msg.document and "video" not in (msg.document.mime_type or ""):
-                        continue
-                        
-                    title = msg.caption or media.file_name or f"Video {msg.id}"
-                    add_anime(msg.id, title, media.file_size, media.duration or 0)
+        # Batch fetch in chunks of 200
+        for i in range(0, len(batch_ids), 200):
+            chunk = batch_ids[i:i+200]
+            msgs = await c.get_messages(CHANNEL_ID, chunk)
+            for msg in msgs:
+                if msg and (msg.video or msg.document):
+                    add_anime(msg.id, msg.caption or "Video", 0, 0)
                     count += 1
+            await status.edit_text(f"Processed: {chunk[-1]}...")
             
-            await status_msg.edit_text(f"🔄 **Scanning...**\nChecked till: {current_end-1}\nFound: {count}")
-            
-        await status_msg.edit_text(f"✅ **Batch Complete!**\n🎯 Range: {start_id}-{end_id}\n📂 Added: {count} Videos")
-        
+        await status.edit_text(f"✅ Done. Added: {count}")
     except Exception as e:
-        await m.reply_text(f"❌ Error: {e}")
+        await m.reply_text(f"Error: {e}")
 
-# Manual Index
-@client.on_message(filters.command("index") & filters.private)
-async def index_handler(c, m: Message):
-    if m.from_user.id != OWNER_ID:
-        return
-
-    try:
-        if len(m.command) < 2:
-            await m.reply_text("ℹ **Usage:** `/index <id>`")
-            return
-        
-        msg_id = int(m.command[1])
-        msg = await c.get_messages(CHANNEL_ID, msg_id)
-        
-        if msg and (msg.video or msg.document):
-            media = msg.video or msg.document
-            title = msg.caption or media.file_name or f"Video {msg.id}"
-            add_anime(msg.id, title, media.file_size, media.duration or 0)
-            await m.reply_text(f"✅ **Indexed:** {title}")
-        else:
-            await m.reply_text("❌ Video not found at this ID.")
-    except Exception as e:
-        await m.reply_text(f"❌ Error: {e}")
-
-# --- SERVER ---
+# --- SERVER LIFESPAN ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🚀 Server Starting...")
     init_db()
     await client.start()
-    print("🤖 Bot Connected! Waiting for commands...")
     
-    # Koshish karo owner ko msg bhejne ki
+    # --- FIX: DELETE WEBHOOK ---
+    print("🧹 Clearing Webhooks...")
+    await client.delete_webhook()
+    
     try:
-        await client.send_message(OWNER_ID, "🟢 **Bot & Server Online!**")
+        await client.send_message(OWNER_ID, "🟢 **Bot Connected & Webhook Cleared!**")
     except Exception as e:
-        print(f"⚠ Could not send startup msg: {e}")
+        print(f"⚠ Msg Error: {e}")
 
     yield
-    print("🛑 Server Stopping...")
     await client.stop()
 
 app = FastAPI(lifespan=lifespan)
