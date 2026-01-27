@@ -1,12 +1,10 @@
 import os
-import asyncio
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from dotenv import load_dotenv
-from contextlib import asynccontextmanager
 from db import init_db, add_anime, search_anime, get_meta
 
 load_dotenv()
@@ -18,21 +16,25 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) 
 OWNER_ID = int(os.getenv("OWNER_ID"))
 
-# Pyrogram Client
+# Pyrogram Client (Bina start kiye)
 client = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, ipv6=False)
 
-# --- BOT HANDLERS ---
+# FastAPI App
+app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+# --- BOT LOGIC ---
 
 @client.on_message(filters.command(["start", "help"]) & filters.private)
 async def start_cmd(c, m: Message):
     if m.from_user.id != OWNER_ID:
         await m.reply_text("❌ Access Denied.")
         return
-    await m.reply_text("✅ **Bot is Online & Ready!**\n\nSend/Forward video to add.\nUse `/check` to test.")
+    await m.reply_text("✅ **Bot is Working!**\n\nForward video to add.\nUse `/check` to test.")
 
 @client.on_message(filters.command("check"))
 async def check_cmd(c, m: Message):
-    await m.reply_text("🚀 **System Status: Green**")
+    await m.reply_text("🚀 **Server is Online & Loop is Fixed!**")
 
 @client.on_message(filters.private & (filters.video | filters.document | filters.forwarded))
 async def media_handler(c, m: Message):
@@ -45,7 +47,7 @@ async def media_handler(c, m: Message):
         msg_id = m.forward_from_message_id
         title = m.caption or m.video.file_name or f"Video {msg_id}"
     elif m.video or m.document:
-        await m.reply_text("⚠ Channel se forward karo taaki ID sahi mile.")
+        await m.reply_text("⚠ Channel se forward karo.")
         return
 
     if msg_id:
@@ -56,47 +58,8 @@ async def media_handler(c, m: Message):
     else:
         await m.reply_text("❌ ID Error.")
 
-# --- SERVER LIFESPAN (Engine) ---
+# --- WEBSITE LOGIC ---
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    print("🚀 Server Starting...")
-    init_db()
-    
-    # --- MAGIC FIX: Start Bot in Background ---
-    # Hum wait nahi karenge, bas start command dekar chhod denge
-    print("🤖 Connecting Bot...")
-    try:
-        await client.start()
-        print("✅ Bot Connected Successfully!")
-        
-        # Webhook clear karne ka try (Safety)
-        try:
-            await client.delete_webhook()
-        except:
-            pass
-
-        # Startup Msg
-        try:
-            await client.send_message(OWNER_ID, "🟢 **System Online!**")
-        except:
-            pass
-            
-    except Exception as e:
-        print(f"❌ Bot Error: {e}")
-
-    yield
-    
-    print("🛑 Server Stopping...")
-    try:
-        await client.stop()
-    except:
-        pass
-
-app = FastAPI(lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-
-# --- ROUTES ---
 @app.get("/")
 def home(): return {"status": "Online"}
 
@@ -139,9 +102,3 @@ async def stream(message_id: int, request: Request):
         "Content-Disposition": f'inline; filename="{file_name}"',
     }
     return StreamingResponse(iterfile(), status_code=206, headers=headers)
-
-if __name__ == "__main__":
-    import uvicorn
-    # --- IMPORTANT: FORCE ASYNCIO LOOP ---
-    # Ye line conflict khatam karti hai
-    uvicorn.run(app, host="0.0.0.0", port=80, loop="asyncio")
