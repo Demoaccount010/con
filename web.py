@@ -10,11 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pyrogram import Client
 from dotenv import load_dotenv
 import uvicorn
-from db import search_anime, get_meta, get_latest_anime, get_anime_details
+# Correct Import Name:
+from db import search_anime, get_meta, get_latest_anime, get_anime_details, get_categories
 
-# LOGS OFF (Sirf Fatal Error dikhega)
-logging.basicConfig(level=logging.CRITICAL)
-
+logging.basicConfig(level=logging.CRITICAL) # Logs Off
 load_dotenv()
 
 API_ID = int(os.getenv("API_ID"))
@@ -50,6 +49,9 @@ def home(): return {"status": "Online"}
 @app.get("/latest")
 def latest(): return {"results": get_latest_anime()}
 
+@app.get("/cats")
+def cats(): return {"categories": get_categories()}
+
 @app.get("/search")
 def search(q: str): return {"results": search_anime(q)}
 
@@ -71,7 +73,6 @@ async def stream(message_id: int, request: Request):
     safe_filename = quote(file_name)
     mime = mimetypes.guess_type(file_name)[0] or "video/mp4"
 
-    # --- RANGE HANDLING ---
     range_header = request.headers.get("Range")
     start, end = 0, file_size - 1
     
@@ -84,11 +85,7 @@ async def stream(message_id: int, request: Request):
                 if len(parts) > 1 and parts[1]: end = int(parts[1])
         except: pass
 
-    # Bounds check
-    if start >= file_size: start = file_size - 1
-    if end >= file_size: end = file_size - 1
-    
-    chunk_size = 1024 * 1024 # 1MB
+    chunk_size = 1024 * 1024
     content_length = end - start + 1
     
     async def iterfile():
@@ -97,24 +94,18 @@ async def stream(message_id: int, request: Request):
             if not msg or (not msg.video and not msg.document): return
             
             file_id = msg.video.file_id if msg.video else msg.document.file_id
-            
-            # --- STREAMING LOOP ---
             current = start
+            
             while current <= end:
                 read_len = min(chunk_size, end - current + 1)
-                
                 try:
                     async for chunk in client.stream_media(file_id, offset=current, limit=read_len):
                         if not chunk: break
                         yield chunk
                         current += len(chunk)
                         if current > end: break
-                except Exception:
-                    break # Connection closed by VLC/MX
-                
-                if current > end: break
-        except:
-            pass
+                except: break
+        except: pass
 
     headers = {
         "Content-Range": f"bytes {start}-{end}/{file_size}",
