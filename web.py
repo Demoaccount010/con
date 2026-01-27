@@ -3,7 +3,7 @@ import logging
 import asyncio
 import mimetypes
 from urllib.parse import quote
-from contextlib import asynccontextmanager # <-- Ye add kiya hai
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,8 +12,10 @@ from dotenv import load_dotenv
 import uvicorn
 from db import search_anime, get_meta, get_latest_anime
 
-# Logging
-logging.basicConfig(level=logging.INFO)
+# --- SILENT MODE (Logs Muted) ---
+logging.basicConfig(level=logging.ERROR) # Sirf Error dikhega
+logging.getLogger("uvicorn.access").setLevel(logging.ERROR)
+logging.getLogger("pyrogram").setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -23,36 +25,21 @@ API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID")) 
 
-# Global Variable
 app_state = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🚀 Web Server Starting...")
-    
-    # Client Initialization inside Lifespan (Same Loop Fix)
-    client = Client(
-        "stream_session", 
-        api_id=API_ID, 
-        api_hash=API_HASH, 
-        bot_token=BOT_TOKEN, 
-        ipv6=False
-    )
-    
+    # Client Start
+    client = Client("stream_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, ipv6=False)
     await client.start()
-    print("✅ Telegram Client Connected on Current Loop")
     
     try:
         await client.get_chat(CHANNEL_ID)
-        print("✅ Handshake Success")
-    except Exception as e:
-        print(f"⚠ Handshake Warning: {e}")
+    except:
+        pass
 
     app_state["client"] = client
-
     yield
-    
-    print("🛑 Stopping Client...")
     await client.stop()
 
 app = FastAPI(lifespan=lifespan)
@@ -79,19 +66,14 @@ def search(q: str):
 @app.get("/stream/{message_id}")
 async def stream(message_id: int, request: Request):
     client = app_state.get("client")
-    if not client:
-        raise HTTPException(status_code=500, detail="Server Error: Client not connected")
+    if not client: raise HTTPException(status_code=500)
 
     meta = get_meta(message_id)
-    if not meta: raise HTTPException(status_code=404, detail="Not Found")
+    if not meta: raise HTTPException(status_code=404)
     
     file_name, file_size = meta
+    safe_filename = quote(file_name)
     
-    try:
-        safe_filename = quote(file_name)
-    except:
-        safe_filename = "video.mp4"
-
     mime_type, _ = mimetypes.guess_type(file_name)
     if not mime_type: mime_type = "video/mp4"
 
@@ -106,28 +88,25 @@ async def stream(message_id: int, request: Request):
             if parts[0]: start = int(parts[0])
             if len(parts) > 1 and parts[1]: end = int(parts[1])
             
-    chunk_size = 1024 * 1024
+    chunk_size = 1024 * 1024 
     content_length = end - start + 1
     
     async def iterfile():
         try:
             msg = await client.get_messages(CHANNEL_ID, message_id)
-            if not msg or (not msg.video and not msg.document):
-                return
+            if not msg or (not msg.video and not msg.document): return
             
             file_id = msg.video.file_id if msg.video else msg.document.file_id
-
             current = start
+            
             while current <= end:
                 limit = min(chunk_size, end - current + 1)
-                
                 async for chunk in client.stream_media(file_id, offset=current, limit=limit):
                     yield chunk
                     current += len(chunk)
                     if current > end: break
-                    
         except Exception as e:
-            logger.error(f"Stream Error: {e}")
+            pass
 
     headers = {
         "Content-Range": f"bytes {start}-{end}/{file_size}",
@@ -139,5 +118,4 @@ async def stream(message_id: int, request: Request):
     return StreamingResponse(iterfile(), status_code=206, headers=headers)
 
 if __name__ == "__main__":
-    # Force Asyncio Loop
     uvicorn.run(app, host="0.0.0.0", port=80, loop="asyncio")
