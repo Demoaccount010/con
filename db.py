@@ -12,7 +12,8 @@ def init_db():
             title TEXT,
             real_filename TEXT, 
             file_size INTEGER,
-            duration INTEGER
+            duration INTEGER,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     conn.commit()
@@ -30,18 +31,25 @@ def add_anime(msg_id, title, real_filename, size, duration):
     finally:
         conn.close()
 
-# --- UPDATE: Search in Title AND Filename ---
 def search_anime(query):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # Yahan humne OR laga diya hai
     c.execute("""
         SELECT message_id, title, real_filename, file_size, duration 
         FROM anime 
         WHERE title LIKE ? OR real_filename LIKE ? 
-        LIMIT 50
+        ORDER BY id DESC LIMIT 50
     """, (f'%{query}%', f'%{query}%'))
-    
+    rows = c.fetchall()
+    conn.close()
+    return [{"id": r[0], "title": r[1], "filename": r[2], "size": r[3], "duration": r[4]} for r in rows]
+
+# --- NEW: Get Latest Videos ---
+def get_latest_anime():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    # ID DESC matlab jo sabse baad mein add hua wo pehle dikhega
+    c.execute("SELECT message_id, title, real_filename, file_size, duration FROM anime ORDER BY id DESC LIMIT 20")
     rows = c.fetchall()
     conn.close()
     return [{"id": r[0], "title": r[1], "filename": r[2], "size": r[3], "duration": r[4]} for r in rows]
