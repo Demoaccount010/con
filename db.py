@@ -1,56 +1,48 @@
-import os
-import logging
-from pyrogram import Client, filters
-from pyrogram.types import Message
-from dotenv import load_dotenv
-from db import init_db, add_anime
+import sqlite3
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+DB_NAME = "anime.db"
 
-load_dotenv()
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    # Table creation with real_filename column
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS anime (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id INTEGER UNIQUE,
+            title TEXT,
+            real_filename TEXT, 
+            file_size INTEGER,
+            duration INTEGER
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID")) 
-OWNER_ID = int(os.getenv("OWNER_ID"))
+def add_anime(msg_id, title, real_filename, size, duration):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    try:
+        c.execute("INSERT OR IGNORE INTO anime (message_id, title, real_filename, file_size, duration) VALUES (?, ?, ?, ?, ?)",
+                  (msg_id, title, real_filename, size, duration))
+        conn.commit()
+    except Exception as e:
+        print(f"DB Error: {e}")
+    finally:
+        conn.close()
 
-init_db()
+def search_anime(query):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT message_id, title, real_filename, file_size, duration FROM anime WHERE title LIKE ? LIMIT 50", (f'%{query}%',))
+    rows = c.fetchall()
+    conn.close()
+    return [{"id": r[0], "title": r[1], "filename": r[2], "size": r[3], "duration": r[4]} for r in rows]
 
-client = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, ipv6=False)
-
-@client.on_message(filters.command(["start", "help"]) & filters.private)
-async def start(c, m: Message):
-    if m.from_user.id != OWNER_ID: return
-    await m.reply_text("✅ **Bot Online!** Forward videos now.")
-
-@client.on_message(filters.private & (filters.video | filters.document | filters.forwarded))
-async def add_video(c, m: Message):
-    if m.from_user.id != OWNER_ID: return
-    
-    msg_id = None
-    title = None
-    real_filename = "video.mp4" # Default
-    
-    if m.forward_from_chat and m.forward_from_chat.id == CHANNEL_ID:
-        msg_id = m.forward_from_message_id
-        
-        # 1. Title (Caption)
-        title = m.caption or m.video.file_name or f"Video {msg_id}"
-        
-        # 2. Asli Filename (Extension ke liye)
-        if m.video:
-            real_filename = m.video.file_name or "video.mp4"
-        elif m.document:
-            real_filename = m.document.file_name or "video.mp4"
-
-        # DB mein save karo
-        add_anime(msg_id, title, real_filename, 0, 0)
-        await m.reply_text(f"✅ **Indexed:**\nTitle: {title}\nFile: `{real_filename}`")
-    else:
-        await m.reply_text("❌ Channel se forward karo.")
-
-if __name__ == "__main__":
-    print("🤖 Bot Started...")
-    client.run()
+def get_meta(msg_id):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT real_filename, file_size FROM anime WHERE message_id=?", (msg_id,))
+    row = c.fetchone()
+    conn.close()
+    return row
