@@ -1,4 +1,5 @@
 import os
+import asyncio
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,37 +21,22 @@ OWNER_ID = int(os.getenv("OWNER_ID"))
 # Pyrogram Client
 client = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, ipv6=False)
 
-# --- DEBUG LOGGER (Terminal mein msg print karega) ---
-@client.on_message(group=-1)
-async def log_everything(c, m: Message):
-    print(f"👀 New Message! From User ID: {m.from_user.id} | Name: {m.from_user.first_name}")
-
-# --- COMMANDS ---
+# --- BOT HANDLERS ---
 
 @client.on_message(filters.command(["start", "help"]) & filters.private)
-async def start_handler(c, m: Message):
-    print(f"👉 Start Command Received from: {m.from_user.id}")
-    
+async def start_cmd(c, m: Message):
     if m.from_user.id != OWNER_ID:
-        await m.reply_text(f"❌ **Access Denied!**\nYour ID: `{m.from_user.id}`\nOwner ID: `{OWNER_ID}`")
+        await m.reply_text("❌ Access Denied.")
         return
-
-    await m.reply_text(
-        "👋 **Bot is Online!**\n\n"
-        "1. Forward video here to add.\n"
-        "2. `/batch 100 200`\n"
-        "3. `/check`"
-    )
+    await m.reply_text("✅ **Bot is Online & Ready!**\n\nSend/Forward video to add.\nUse `/check` to test.")
 
 @client.on_message(filters.command("check"))
-async def check_handler(c, m: Message):
-    await m.reply_text("✅ I am Alive and Listening!")
+async def check_cmd(c, m: Message):
+    await m.reply_text("🚀 **System Status: Green**")
 
-# Media Handler
 @client.on_message(filters.private & (filters.video | filters.document | filters.forwarded))
 async def media_handler(c, m: Message):
-    if m.from_user.id != OWNER_ID:
-        return
+    if m.from_user.id != OWNER_ID: return
 
     msg_id = None
     title = None
@@ -59,68 +45,58 @@ async def media_handler(c, m: Message):
         msg_id = m.forward_from_message_id
         title = m.caption or m.video.file_name or f"Video {msg_id}"
     elif m.video or m.document:
-        await m.reply_text("⚠ Please forward from the Channel to get the correct Message ID.")
+        await m.reply_text("⚠ Channel se forward karo taaki ID sahi mile.")
         return
 
     if msg_id:
         file_size = m.video.file_size or m.document.file_size
         duration = m.video.duration or 0
         add_anime(msg_id, title, file_size, duration)
-        await m.reply_text(f"✅ **Saved:** {title}")
+        await m.reply_text(f"💾 **Saved:** {title}")
     else:
-        await m.reply_text("❌ Channel ID match nahi hua.")
+        await m.reply_text("❌ ID Error.")
 
-# Batch Handler
-@client.on_message(filters.command("batch") & filters.private)
-async def batch_handler(c, m: Message):
-    if m.from_user.id != OWNER_ID: return
+# --- SERVER LIFESPAN (Engine) ---
 
-    try:
-        if len(m.command) < 3:
-            await m.reply_text("Usage: `/batch start end`")
-            return
-        
-        start = int(m.command[1])
-        end = int(m.command[2])
-        status = await m.reply_text("⏳ Scanning...")
-        
-        count = 0
-        batch_ids = list(range(start, end + 1))
-        
-        for i in range(0, len(batch_ids), 200):
-            chunk = batch_ids[i:i+200]
-            msgs = await c.get_messages(CHANNEL_ID, chunk)
-            for msg in msgs:
-                if msg and (msg.video or msg.document):
-                    add_anime(msg.id, msg.caption or "Video", 0, 0)
-                    count += 1
-            await status.edit_text(f"Processed: {chunk[-1]}...")
-            
-        await status.edit_text(f"✅ Done. Added: {count}")
-    except Exception as e:
-        await m.reply_text(f"Error: {e}")
-
-# --- SERVER LIFESPAN ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🚀 Server Starting...")
     init_db()
-    print("🤖 Connecting to Telegram...")
-    await client.start()
     
-    # Send startup msg
+    # --- MAGIC FIX: Start Bot in Background ---
+    # Hum wait nahi karenge, bas start command dekar chhod denge
+    print("🤖 Connecting Bot...")
     try:
-        await client.send_message(OWNER_ID, "🟢 **Bot Connected!**")
-    except:
-        print("⚠ Could not send startup msg (Check Owner ID)")
+        await client.start()
+        print("✅ Bot Connected Successfully!")
+        
+        # Webhook clear karne ka try (Safety)
+        try:
+            await client.delete_webhook()
+        except:
+            pass
+
+        # Startup Msg
+        try:
+            await client.send_message(OWNER_ID, "🟢 **System Online!**")
+        except:
+            pass
+            
+    except Exception as e:
+        print(f"❌ Bot Error: {e}")
 
     yield
-    print("🛑 Stopping...")
-    await client.stop()
+    
+    print("🛑 Server Stopping...")
+    try:
+        await client.stop()
+    except:
+        pass
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+# --- ROUTES ---
 @app.get("/")
 def home(): return {"status": "Online"}
 
@@ -166,4 +142,6 @@ async def stream(message_id: int, request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=80)
+    # --- IMPORTANT: FORCE ASYNCIO LOOP ---
+    # Ye line conflict khatam karti hai
+    uvicorn.run(app, host="0.0.0.0", port=80, loop="asyncio")
